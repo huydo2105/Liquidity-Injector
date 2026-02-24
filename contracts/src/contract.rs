@@ -211,7 +211,7 @@ fn execute_settle_with_quorum(
 
 fn execute_withdraw_injection(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     info: MessageInfo,
     amount: Uint128,
 ) -> Result<Response, ContractError> {

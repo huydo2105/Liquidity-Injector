@@ -20,8 +20,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-ed25519-dalek = { version = "2", features = ["serde"], default-features = false }
+ed25519-dalek = { version = "2", features = ["serde", "rand_core"], default-features = false }
 hex = "0.4"
 
 [dev-dependencies]
 cw-multi-test = "2.3"
+rand = { workspace = true }

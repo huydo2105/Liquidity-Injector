@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::Direction;
