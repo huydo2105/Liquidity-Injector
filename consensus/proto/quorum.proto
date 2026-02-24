@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package quorum;
+
+/// Service exposed by each Validator TEE node.
+service ValidatorService {
+  /// Receive a settlement proposal, verify attestation + math, return signed vote.
+  rpc ValidateProposal(ProposalRequest) returns (VoteResponse);
+}
+
+/// Service exposed by the Collector node to aggregate votes.
+service CollectorService {
+  /// Submit a validator's signed vote.
+  rpc SubmitVote(VoteRequest) returns (QuorumStatusResponse);
+  /// Poll for current quorum status.
+  rpc GetQuorumStatus(StatusRequest) returns (QuorumStatusResponse);
+}
+
+// ─── Messages ─────────────────────────────────────────────
+
+message ProposalRequest {
+  bytes proposal_id = 1;
+  bytes proposal_hash = 2;
+  /// JSON-serialized FlowSolution
+  bytes flow_data = 3;
+  /// JSON-serialized AttestationQuote from the proposer
+  bytes attestation = 4;
+  /// JSON-serialized list of original obligations (for recalculation)
+  bytes obligations_data = 5;
+  /// Injection amount used
+  uint64 injection_amount = 6;
+}
+
+message VoteResponse {
+  bool accepted = 1;
+  bytes validator_pubkey = 2;
+  bytes signature = 3;
+  string reason = 4;
+}
+
+message VoteRequest {
+  bytes proposal_hash = 1;
+  bytes validator_pubkey = 2;
+  bytes signature = 3;
+}
+
+message StatusRequest {
+  bytes proposal_hash = 1;
+}
+
+message QuorumStatusResponse {
+  bytes proposal_hash = 1;
+  uint32 signatures_received = 2;
+  uint32 signatures_required = 3;
+  bool quorum_reached = 4;
+  /// Set when quorum is reached
+  QuorumCertificateProto certificate = 5;
+  repeated ValidatorStatus validators = 6;
+}
+
+message ValidatorStatus {
+  bytes pubkey = 1;
+  bool has_signed = 2;
+}
+
+message QuorumCertificateProto {
+  bytes proposal_hash = 1;
+  repeated ValidatorSignature signatures = 2;
+  uint32 threshold = 3;
+}
+
+message ValidatorSignature {
+  bytes pubkey = 1;
+  bytes signature = 2;
+}

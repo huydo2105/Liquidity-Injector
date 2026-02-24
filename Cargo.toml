@@ -1,0 +1,11 @@
+[workspace]
+members = ["enclave", "consensus", "contracts"]
+resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
+rand = "0.8"
+thiserror = "1"
