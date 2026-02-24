@@ -1,5 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 /// A unique identifier for a participant (business) in the debt network.
 /// In production, this would be a Cosmos address.
@@ -73,6 +74,7 @@ pub struct AttestationQuote {
     /// Hash of the enclave signer (MRSIGNER).
     pub mrsigner: [u8; 32],
     /// SHA-256 hash of the data being attested (the proposal).
+    #[serde(with = "BigArray")]
     pub report_data: [u8; 64],
     /// Timestamp of attestation.
     pub timestamp: u64,
