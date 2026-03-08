@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-blue: #3b82f6;
+  --color-brand-purple: #8b5cf6;
+  --color-brand-bg: #111111;
+  --color-brand-card: #18191b;
+  --color-brand-border: #27272a;
+}
+
+@layer base {
+  :root {
+    --bg-primary: #111111;
+    --bg-secondary: #0a0a0a;
+    --bg-card: #18191b;
+    --border-glass: #27272a;
+    --text-primary: #f8fafc;
+    --text-secondary: #a1a1aa;
+    --accent-blue: #3b82f6;
+  }
+}
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+}
+
+@layer components {
+  .hero-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-glass);
+    border-radius: 16px;
+    transition: all 0.2s ease;
+  }
+
+  .hero-card:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    background: #1a1b1e;
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, #60a5fa, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
