@@ -38,6 +38,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         result
     };
 
+    // Generate MRSIGNER for the expected enclave signer (Quartz)
+    let expected_mrsigner = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"informal-systems-quartz-signer");
+        let result: [u8; 32] = hasher.finalize().into();
+        result
+    };
+
     match role {
         "validator" => {
             println!("🔐 Starting Validator Node on {}", addr);
@@ -47,7 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 hex::encode(signing_key.verifying_key().to_bytes())
             );
 
-            let validator = ValidatorNode::new(signing_key, expected_mrenclave);
+            // Allow quotes up to 5 minutes old
+            let validator = ValidatorNode::new(signing_key, expected_mrenclave, expected_mrsigner, 300);
 
             Server::builder()
                 .add_service(ValidatorServiceServer::new(validator))

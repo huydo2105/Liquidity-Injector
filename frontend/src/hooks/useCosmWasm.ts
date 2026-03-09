@@ -43,6 +43,57 @@ export function useCosmWasm() {
             const keplr = (window as any).keplr;
 
             // Suggest chain if needed
+            if (keplr.experimentalSuggestChain) {
+                try {
+                    await keplr.experimentalSuggestChain({
+                        chainId: CONTRACT_CONFIG.chainId,
+                        chainName: "Juno Testnet",
+                        rpc: CONTRACT_CONFIG.rpcEndpoint,
+                        rest: "https://api.uni.junonetwork.io",
+                        bip44: {
+                            coinType: 118,
+                        },
+                        bech32Config: {
+                            bech32PrefixAccAddr: "juno",
+                            bech32PrefixAccPub: "junopub",
+                            bech32PrefixValAddr: "junovaloper",
+                            bech32PrefixValPub: "junovaloperpub",
+                            bech32PrefixConsAddr: "junovalcons",
+                            bech32PrefixConsPub: "junovalconspub",
+                        },
+                        currencies: [
+                            {
+                                coinDenom: "JUNOX",
+                                coinMinimalDenom: CONTRACT_CONFIG.denom,
+                                coinDecimals: 6,
+                                coinGeckoId: "juno-network",
+                            },
+                        ],
+                        feeCurrencies: [
+                            {
+                                coinDenom: "JUNOX",
+                                coinMinimalDenom: CONTRACT_CONFIG.denom,
+                                coinDecimals: 6,
+                                coinGeckoId: "juno-network",
+                                gasPriceStep: {
+                                    low: 0.03,
+                                    average: 0.04,
+                                    high: 0.05,
+                                },
+                            },
+                        ],
+                        stakeCurrency: {
+                            coinDenom: "JUNOX",
+                            coinMinimalDenom: CONTRACT_CONFIG.denom,
+                            coinDecimals: 6,
+                            coinGeckoId: "juno-network",
+                        },
+                    });
+                } catch {
+                    throw new Error("Failed to suggest the chain to Keplr.");
+                }
+            }
+
             await keplr.enable(CONTRACT_CONFIG.chainId);
 
             const offlineSigner = keplr.getOfflineSigner(CONTRACT_CONFIG.chainId);
@@ -54,19 +105,25 @@ export function useCosmWasm() {
 
             const address = accounts[0].address;
 
-            // Get balance using CosmJS
-            const { SigningCosmWasmClient } = await import("@cosmjs/cosmwasm-stargate");
-            const client = await SigningCosmWasmClient.connectWithSigner(
-                CONTRACT_CONFIG.rpcEndpoint,
-                offlineSigner
-            );
+            let balanceAmount = "0";
+            try {
+                // Get balance using CosmJS
+                const { SigningCosmWasmClient } = await import("@cosmjs/cosmwasm-stargate");
+                const client = await SigningCosmWasmClient.connectWithSigner(
+                    CONTRACT_CONFIG.rpcEndpoint,
+                    offlineSigner
+                );
 
-            const balance = await client.getBalance(address, CONTRACT_CONFIG.denom);
+                const balance = await client.getBalance(address, CONTRACT_CONFIG.denom);
+                balanceAmount = balance.amount;
+            } catch (rpcError) {
+                console.warn("Failed to fetch balance via RPC, but keplr is connected", rpcError);
+            }
 
             setState({
                 connected: true,
                 address,
-                balance: balance.amount,
+                balance: balanceAmount,
             });
         } catch (err: any) {
             setError(err.message);

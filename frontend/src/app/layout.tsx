@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import Header from "@/components/Header";
 
 export const metadata: Metadata = {
   title: "Cycles Liquidity Injector",
@@ -22,7 +23,8 @@ export default function RootLayout({
       </head>
       <body className="antialiased bg-[#111111] text-[#f8fafc] font-sans flex min-h-screen">
         <Sidebar />
-        <div className="flex-1 flex flex-col min-h-screen">
+        <div className="flex-1 flex flex-col min-h-screen w-full relative">
+          <Header />
           {children}
         </div>
       </body>

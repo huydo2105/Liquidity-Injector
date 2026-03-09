@@ -12,9 +12,6 @@ export default function ConsensusPage() {
                     <h1 className="text-2xl font-bold text-white tracking-tight">BFT Quorum</h1>
                     <p className="text-sm text-zinc-400 mt-1">Real-time status of 2f+1 Validator Network.</p>
                 </div>
-                <button className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-white text-sm font-medium shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 transition-shadow">
-                    Connect Keplr
-                </button>
             </div>
 
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>

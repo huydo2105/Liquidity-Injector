@@ -16,13 +16,19 @@ pub struct ValidatorNode {
     signing_key: SigningKey,
     /// Expected MRENCLAVE hash of the proposer enclave
     expected_mrenclave: [u8; 32],
+    /// Expected MRSIGNER hash of the trusted builder
+    expected_mrsigner: [u8; 32],
+    /// Maximum allowed age of an attestation quote in seconds (e.g., 5 minutes)
+    max_quote_age_secs: u64,
 }
 
 impl ValidatorNode {
-    pub fn new(signing_key: SigningKey, expected_mrenclave: [u8; 32]) -> Self {
+    pub fn new(signing_key: SigningKey, expected_mrenclave: [u8; 32], expected_mrsigner: [u8; 32], max_quote_age_secs: u64) -> Self {
         Self {
             signing_key,
             expected_mrenclave,
+            expected_mrsigner,
+            max_quote_age_secs,
         }
     }
 
@@ -41,22 +47,31 @@ impl ValidatorNode {
         injection_amount: u128,
     ) -> Result<(Vec<u8>, [u8; 32]), String> {
         // Step 1: Verify the proposer's attestation quote
-        if !verify_attestation_quote(attestation, &self.expected_mrenclave, proposal_hash) {
-            return Err("Attestation verification failed: MRENCLAVE mismatch".into());
+        if let Err(e) = verify_attestation_quote(
+            attestation,
+            &self.expected_mrenclave,
+            &self.expected_mrsigner,
+            proposal_hash,
+            self.max_quote_age_secs,
+        ) {
+            return Err(format!("Attestation verification failed: {}", e));
         }
 
         // Step 2: Independently recalculate the flow to verify math
         let recalculated_flow = compute_mtcs_flow(obligations, injection_amount)
             .map_err(|e| format!("Flow recalculation failed: {}", e))?;
 
-        // Step 3: Validate that the proposed flow satisfies protocol invariants
-        validate_flow(flow, obligations)
-            .map_err(|e| format!("Flow validation failed: {}", e))?;
+        let recalculated_hash = enclave::crypto::hash_flow_solution(&recalculated_flow);
 
-        // Step 4: Verify the proposal hash matches the flow
+        // Step 3: Verify the proposer's flow hash matches exactly our deterministic recalculation
+        if &recalculated_hash != proposal_hash {
+            return Err("Flow mismatch: proposed flow does not match deterministic validator recalculation".into());
+        }
+
+        // Step 4: Verify the provided flow itself generates the same hash (integrity constraint)
         let expected_hash = enclave::crypto::hash_flow_solution(flow);
         if &expected_hash != proposal_hash {
-            return Err("Proposal hash mismatch".into());
+            return Err("Proposal hash mismatch: flow structure altered".into());
         }
 
         // Step 5: Sign the proposal hash
@@ -144,10 +159,16 @@ mod tests {
         hasher.finalize().into()
     }
 
+    fn test_mrsigner() -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"informal-systems-quartz-signer");
+        hasher.finalize().into()
+    }
+
     #[test]
     fn test_validator_verify_valid_proposal() {
         let signing_key = SigningKey::generate(&mut OsRng);
-        let validator = ValidatorNode::new(signing_key, test_mrenclave());
+        let validator = ValidatorNode::new(signing_key, test_mrenclave(), test_mrsigner(), 300);
 
         let obligations = vec![
             Obligation { id: 0, debtor: "A".into(), creditor: "B".into(), amount: 100 },
@@ -192,7 +213,7 @@ mod tests {
     #[test]
     fn test_validator_rejects_bad_attestation() {
         let signing_key = SigningKey::generate(&mut OsRng);
-        let validator = ValidatorNode::new(signing_key, [0xAB; 32]); // wrong MRENCLAVE
+        let validator = ValidatorNode::new(signing_key, [0xAB; 32], test_mrsigner(), 300); // wrong MRENCLAVE
 
         let obligations = vec![
             Obligation { id: 0, debtor: "A".into(), creditor: "B".into(), amount: 100 },
@@ -226,5 +247,54 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("MRENCLAVE"));
+    }
+
+    #[test]
+    fn test_validator_rejects_adversarial_suboptimal_flow() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let validator = ValidatorNode::new(signing_key, test_mrenclave(), test_mrsigner(), 300);
+
+        let obligations = vec![
+            Obligation { id: 0, debtor: "A".into(), creditor: "B".into(), amount: 100 },
+            Obligation { id: 1, debtor: "B".into(), creditor: "C".into(), amount: 150 },
+            Obligation { id: 2, debtor: "C".into(), creditor: "A".into(), amount: 200 },
+        ];
+
+        // An attacker might propose a flow that clears 0 to maliciously freeze the protocol,
+        // even though a valid cycle of 100 exists.
+        let mut malicious_flow = FlowSolution::new();
+        malicious_flow.total_cleared = 0;
+        malicious_flow.injection_used = 0;
+        // The malicious flow is "internally valid" (bounds and balance check out, because nothing is cleared).
+
+        let malicious_hash = enclave::crypto::hash_flow_solution(&malicious_flow);
+
+        // The attacker creates a perfectly valid looking proposal for their bad flow
+        let proposal = enclave::types::SettlementProposal {
+            proposal_id: [0; 32],
+            flow: malicious_flow.clone(),
+            attestation: enclave::types::AttestationQuote {
+                mrenclave: test_mrenclave(), // Assume they use a valid enclave...
+                mrsigner: [0; 32],
+                report_data: [0; 64],
+                timestamp: 0,
+            },
+            proposal_hash: malicious_hash,
+        };
+        // Generate a valid signature over the bad hash
+        let attestation = enclave::crypto::generate_attestation_quote(&proposal);
+
+        // The validator receives this apparently valid proposal
+        let result = validator.verify_and_sign(
+            &malicious_hash,
+            &malicious_flow,
+            &attestation,
+            &obligations,
+            0,
+        );
+
+        // It should be rejected because it doesn't match the deterministic output of MTCS (which would clear 100)
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Flow mismatch"));
     }
 }

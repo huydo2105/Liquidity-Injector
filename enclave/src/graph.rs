@@ -194,15 +194,23 @@ fn unblock(
     }
 }
 
-/// Compute a settlement flow using a simplified MTCS approach.
+/// Compute a settlement flow using a simplified MTCS (Multilateral Trade Credit Set-off) approach.
 ///
-/// Strategy:
-/// 1. Find all cycles in the graph
-/// 2. Greedily clear cycles (largest clearable amount first)
-/// 3. Use injection liquidity to clear remaining "almost-cycles" (paths
-///    where only a small gap prevents full clearing)
+/// **Formal Optimization Objective:**
+/// Find a flow vector `F` that maximizes the total cleared notional welfare `W`:
+///   maximize W = sum(f_ij) across all edges (i,j) in F
+/// 
+/// Subject to constraints:
+/// 1. Bounds: 0 <= f_ij <= g_ij (cannot clear more than the outstanding obligation)
+/// 2. Conservation: sum(f_ik) - sum(f_ki) = 0 for all nodes i (Kirchhoff's current law)
+/// 3. Injection Limit: The total "gap" covered by active liquidity must be <= `injection_amount`.
 ///
-/// Returns a balanced FlowSolution where for each node: flow_in == flow_out.
+/// **Current Implementation Strategy (Greedy Cycle-First):**
+/// 1. Enumerate all elementary cycles via Johnson's algorithm.
+/// 2. Greedily clear cycles sorted by bottleneck capacity to quickly approximate max W.
+/// 3. Allocate `injection_amount` to "near-cycles" to unblock additional welfare.
+///
+/// Returns a balanced `FlowSolution` satisfying the mathematical invariants.
 pub fn compute_mtcs_flow(
     obligations: &[Obligation],
     injection_amount: u128,
@@ -504,5 +512,39 @@ mod tests {
             injection_used: 0,
         };
         assert!(validate_flow(&bad_flow, &obs).is_err());
+    }
+
+    #[test]
+    fn test_paper_benchmark_topology_1() {
+        // A complex interconnected topology simulating corporate supply chains
+        // as described in the Cycles Protocol evaluation benchmarks.
+        let obs = vec![
+            // Core liquidity loop
+            Obligation { id: 1, debtor: "Bank".into(), creditor: "CorpA".into(), amount: 1000 },
+            Obligation { id: 2, debtor: "CorpA".into(), creditor: "Supplier1".into(), amount: 800 },
+            Obligation { id: 3, debtor: "Supplier1".into(), creditor: "Sub1".into(), amount: 500 },
+            Obligation { id: 4, debtor: "Sub1".into(), creditor: "Bank".into(), amount: 600 },
+            // Secondary interleaved loop
+            Obligation { id: 5, debtor: "CorpA".into(), creditor: "Supplier2".into(), amount: 400 },
+            Obligation { id: 6, debtor: "Supplier2".into(), creditor: "Sub2".into(), amount: 300 },
+            Obligation { id: 7, debtor: "Sub2".into(), creditor: "Sub1".into(), amount: 300 },
+            // Dead end (should not clear)
+            Obligation { id: 8, debtor: "Supplier1".into(), creditor: "Retail".into(), amount: 150 },
+        ];
+
+        let start = std::time::Instant::now();
+        let flow = compute_mtcs_flow(&obs, 0).unwrap();
+        let elapsed = start.elapsed();
+
+        // Ensure time-to-finality for graph computation is extremely fast for demo limits
+        assert!(elapsed.as_millis() < 50, "Graph computation took too long: {}ms", elapsed.as_millis());
+
+        // Validate the invariants hold for this complex paper topology
+        assert!(validate_flow(&flow, &obs).is_ok());
+
+        assert!(flow.total_cleared > 0);
+        // "Retail" is a sink node, no cycles can form through it
+        let cleared_retail = flow.flows.iter().any(|f| f.creditor == "Retail" || f.debtor == "Retail");
+        assert!(!cleared_retail, "Dead-end nodes should not be cleared in pure cycle clearing");
     }
 }

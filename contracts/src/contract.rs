@@ -18,8 +18,18 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let n = msg.validators.len() as u32;
-    let f = (n - 1) / 3;
+    if n == 0 {
+        return Err(ContractError::InvalidCommittee { reason: "Committee cannot be empty".into() });
+    }
+
+    let f = n.saturating_sub(1) / 3;
     let threshold = msg.quorum_threshold.unwrap_or(2 * f + 1);
+
+    if threshold == 0 || threshold > n {
+        return Err(ContractError::InvalidCommittee {
+            reason: format!("Invalid quorum threshold: must be between 1 and {n}")
+        });
+    }
 
     let committee = Committee {
         validators: msg.validators,
@@ -58,6 +68,7 @@ pub fn execute(
         } => execute_settle_with_quorum(
             deps,
             env,
+            info,
             proposal_hash,
             net_flows,
             signatures,
@@ -118,6 +129,7 @@ fn execute_deposit_injection(
 fn execute_settle_with_quorum(
     deps: DepsMut,
     _env: Env,
+    info: MessageInfo,
     proposal_hash: String,
     net_flows: Vec<NetFlowEntry>,
     signatures: Vec<ValidatorSignatureMsg>,
@@ -130,6 +142,13 @@ fn execute_settle_with_quorum(
     {
         return Err(ContractError::AlreadySettled {
             hash: proposal_hash,
+        });
+    }
+
+    // 1.5. Validate Hash Length (64 hex chars == 32 bytes)
+    if proposal_hash.len() != 64 {
+        return Err(ContractError::InvalidProposalHash {
+            reason: "Hash must be exactly 64 hex characters (32 bytes)".into()
         });
     }
 
@@ -183,6 +202,22 @@ fn execute_settle_with_quorum(
             .map_err(|_| ContractError::InvalidSignature {
                 pubkey: sig.pubkey.clone(),
             })?;
+    }
+
+    // 5.5 Deduct injection_used from the sender's balance atomically
+    if injection_used > Uint128::zero() {
+        let current_balance = BALANCES
+            .may_load(deps.storage, &info.sender)?
+            .unwrap_or(Uint128::zero());
+
+        if current_balance < injection_used {
+            return Err(ContractError::InsufficientBalance {
+                available: current_balance.to_string(),
+                required: injection_used.to_string(),
+            });
+        }
+        
+        BALANCES.save(deps.storage, &info.sender, &(current_balance - injection_used))?;
     }
 
     // 6. Execute net flows atomically — update debt states
@@ -291,9 +326,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetCommittee {} => {
             let committee = COMMITTEE.load(deps.storage)?;
             to_json_binary(&CommitteeResponse {
+                total_validators: committee.validators.len() as u32,
                 validators: committee.validators,
                 quorum_threshold: committee.quorum_threshold,
-                total_validators: 0, // Will be set below
             })
         }
         QueryMsg::GetObligationCount {} => {
@@ -372,6 +407,47 @@ mod tests {
         assert_eq!(committee.quorum_threshold, 3);
     }
 
+#[test]
+    fn test_reject_invalid_committee_size() {
+        let mut deps = mock_dependencies();
+        
+        let msg = InstantiateMsg {
+            validators: vec![],
+            quorum_threshold: None,
+        };
+        let info = message_info(&Addr::unchecked("admin"), &[]);
+        let err = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+        match err {
+            ContractError::InvalidCommittee { reason } => {
+                assert_eq!(reason, "Committee cannot be empty");
+            }
+            _ => panic!("Expected InvalidCommittee, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_reject_invalid_quorum_threshold() {
+        let mut deps = mock_dependencies();
+        let validators: Vec<ValidatorInfo> = (0..5).map(|i| ValidatorInfo {
+            pubkey: format!("pk{}", i),
+            name: format!("name{}", i),
+        }).collect();
+        
+        // n=5, impossible threshold 6
+        let msg = InstantiateMsg {
+            validators,
+            quorum_threshold: Some(6),
+        };
+        let info = message_info(&Addr::unchecked("admin"), &[]);
+        let err = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+        match err {
+            ContractError::InvalidCommittee { reason } => {
+                assert!(reason.contains("must be between 1 and 5"));
+            }
+            _ => panic!("Expected InvalidCommittee, got {:?}", err),
+        }
+    }
+
     #[test]
     fn test_submit_obligation() {
         let mut deps = mock_dependencies();
@@ -438,10 +514,14 @@ mod tests {
                 amount: Uint128::new(100),
             }],
             signatures: sigs,
-            injection_used: Uint128::zero(),
+            injection_used: Uint128::new(50),
         };
 
-        let info = message_info(&Addr::unchecked("anyone"), &[]);
+        // Give the sender sufficient injection liquidity balance first
+        let info_deposit = message_info(&Addr::unchecked("relayer"), &coins(100, "ujuno"));
+        execute(deps.as_mut(), mock_env(), info_deposit, ExecuteMsg::DepositInjection {}).unwrap();
+
+        let info = message_info(&Addr::unchecked("relayer"), &[]);
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
         assert_eq!(res.attributes[0].value, "settle_with_quorum");
 
@@ -450,6 +530,69 @@ mod tests {
             .load(&deps.storage, &proposal_hash_hex)
             .unwrap();
         assert!(settled);
+
+        // Verify balance was natively deducted
+        let post_balance = BALANCES
+            .load(&deps.storage, &Addr::unchecked("relayer"))
+            .unwrap();
+        assert_eq!(post_balance, Uint128::new(50)); // 100 deposited - 50 injected used
+    }
+
+    #[test]
+    fn test_reject_insufficient_injection_balance() {
+        let mut deps = mock_dependencies();
+        let validators = generate_validators(5);
+        let signing_keys = setup_contract(deps.as_mut(), validators.clone());
+
+        let proposal_hash_bytes = [42u8; 32];
+        let proposal_hash_hex = hex::encode(proposal_hash_bytes);
+
+        let sigs: Vec<ValidatorSignatureMsg> = signing_keys[0..3]
+            .iter()
+            .map(|sk| {
+                let sig = sk.sign(&proposal_hash_bytes);
+                ValidatorSignatureMsg {
+                    pubkey: hex::encode(sk.verifying_key().to_bytes()),
+                    signature: hex::encode(sig.to_bytes()),
+                }
+            })
+            .collect();
+
+        let msg = ExecuteMsg::SettleWithQuorum {
+            proposal_hash: proposal_hash_hex,
+            net_flows: vec![],
+            signatures: sigs,
+            injection_used: Uint128::new(100), // Requires 100 injection liquidity
+        };
+
+        let info = message_info(&Addr::unchecked("broke_relayer"), &[]);
+        let err = execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+        match err {
+            ContractError::InsufficientBalance { available, required } => {
+                assert_eq!(available, "0");
+                assert_eq!(required, "100");
+            }
+            _ => panic!("Expected InsufficientBalance, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_reject_invalid_proposal_hash_length() {
+        let mut deps = mock_dependencies();
+        // Setup is not strictly needed for this specific error since it fails validation early
+        let msg = ExecuteMsg::SettleWithQuorum {
+            proposal_hash: "invalidlengthhash".into(),
+            net_flows: vec![],
+            signatures: vec![],
+            injection_used: Uint128::zero(),
+        };
+
+        let info = message_info(&Addr::unchecked("anyone"), &[]);
+        let err = execute(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+        match err {
+            ContractError::InvalidProposalHash { .. } => {}
+            _ => panic!("Expected InvalidProposalHash, got {:?}", err),
+        }
     }
 
     #[test]

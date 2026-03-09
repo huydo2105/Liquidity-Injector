@@ -9,6 +9,12 @@ pub enum ContractError {
     #[error("Insufficient quorum: got {received} signatures, need {required}")]
     InsufficientQuorum { received: u32, required: u32 },
 
+    #[error("Invalid committee: {reason}")]
+    InvalidCommittee { reason: String },
+
+    #[error("Invalid proposal hash: {reason}")]
+    InvalidProposalHash { reason: String },
+
     #[error("Invalid signature from validator {pubkey}")]
     InvalidSignature { pubkey: String },
 
